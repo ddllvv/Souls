@@ -347,60 +347,155 @@ def main_menu_keyboard():
         types.InlineKeyboardButton("Магазин 🏪", callback_data="shop")
         )
     
+# ==================== ОБРАБОТЧИК ИССЛЕДОВАНИЯ ====================
 @dp.callback_query_handler(lambda c: c.data == 'explore')
 async def process_explore(callback: types.CallbackQuery):
+    conn = None
     try:
-        await callback.answer()
+        await callback.answer("⏳ Исследуем локацию...")
+        logger.debug(f"User {callback.from_user.id} начал исследование")
+        
+        # Получаем данные игрока
         conn = psycopg2.connect(POSTGRES_URL)
         with conn.cursor(cursor_factory=DictCursor) as cur:
-            # Получаем текущую локацию игрока
-            cur.execute("SELECT current_location FROM players WHERE user_id = %s", (callback.from_user.id,))
-            player_data = cur.fetchone()
+            # Получаем текущую локацию
+            cur.execute("""
+                SELECT current_location, level 
+                FROM players 
+                WHERE user_id = %s
+            """, (callback.from_user.id,))
+            player = cur.fetchone()
             
-            if not player_data:
-                await callback.answer("Игрок не найден", show_alert=True)
+            if not player:
+                logger.error(f"Игрок {callback.from_user.id} не найден")
+                await callback.answer("❌ Сначала создайте персонажа!", show_alert=True)
                 return
-                
-            location_name = player_data['current_location']
 
-            # Получаем данные локации
-            cur.execute("SELECT * FROM locations WHERE name = %s", (location_name,))
+            # Проверяем локацию
+            cur.execute("""
+                SELECT * 
+                FROM locations 
+                WHERE name = %s 
+                AND min_level <= %s
+            """, (player['current_location'], player['level']))
             location = cur.fetchone()
             
             if not location:
-                await callback.answer("Локация не найдена", show_alert=True)
+                logger.error(f"Локация {player['current_location']} не найдена")
+                await callback.answer("🚧 Локация недоступна", show_alert=True)
                 return
 
             # Выбираем случайное событие
             if not location['events']:
-                await callback.answer("В этой локации нет событий", show_alert=True)
+                await callback.answer("ℹ️ Здесь пока нечего делать", show_alert=True)
                 return
                 
             event = random.choice(location['events'])
-            
+            logger.debug(f"Событие: {event} в локации {location['name']}")
+
+            # Обработка событий
             if event == "fight":
-                if not location['enemies']:
-                    await callback.answer("Нет доступных врагов", show_alert=True)
-                    return
-                    
                 enemy = random.choice(location['enemies'])
-                result = await BattleSystem.handle_attack(callback.from_user.id, enemy)
+                cur.execute("SELECT * FROM enemies WHERE name = %s", (enemy,))
+                enemy_data = cur.fetchone()
+                
+                if not enemy_data:
+                    logger.error(f"Враг {enemy} не найден")
+                    await callback.answer("⚠️ Ошибка генерации врага", show_alert=True)
+                    return
+
+                # Начало боя
+                battle_text = (
+                    f"⚔️ На вас напал {enemy}!\n"
+                    f"❤️ HP: {enemy_data['hp']} | 🛡️ Броня: {enemy_data['armor']}\n"
+                    f"💢 Урон: {enemy_data['attack']} | 🎯 Слабость: {enemy_data['weakness']}"
+                )
                 await callback.message.edit_text(
-                    f"💀 На вас напал {enemy}!\n\n{result}",
+                    battle_text,
                     reply_markup=action_keyboard("battle")
                 )
-                
+
             elif event == "treasure":
                 gold = random.randint(50, 200)
-                cur.execute("UPDATE players SET gold = gold + %s WHERE user_id = %s", (gold, callback.from_user.id))
-                await callback.message.edit_text(
-                    f"💎 Вы нашли сундук с {gold} золота!",
-                    reply_markup=action_keyboard(None)
-                )
+                cur.execute("""
+                    UPDATE players 
+                    SET gold = gold + %s 
+                    WHERE user_id = %s
+                """, (gold, callback.from_user.id))
+                conn.commit()
                 
+                await callback.message.edit_text(
+                    f"🎉 Вы нашли сундук с {gold} золота!",
+                    reply_markup=action_keyboard("treasure")
+                )
+
+            else:
+                await callback.message.edit_text(
+                    "🌌 Произошло что-то странное...",
+                    reply_markup=action_keyboard()
+                )
+
     except Exception as e:
-        logger.error(f"Error in process_explore: {e}", exc_info=True)
-        await callback.answer("⚠️ Ошибка при исследовании", show_alert=True)
+        logger.error(f"Explore error: {str(e)}", exc_info=True)
+        await callback.answer("🔥 Критическая ошибка при исследовании", show_alert=True)
+    finally:
+        if conn:
+            conn.close()
+
+# ==================== ОБРАБОТЧИК СТАТИСТИКИ ====================
+@dp.callback_query_handler(lambda c: c.data == 'stats')
+async def process_stats(callback: types.CallbackQuery):
+    conn = None
+    try:
+        await callback.answer("📊 Загрузка статистики...")
+        logger.debug(f"Запрос статистики от {callback.from_user.id}")
+        
+        conn = psycopg2.connect(POSTGRES_URL)
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute("""
+                SELECT 
+                    p.*,
+                    w.name as weapon,
+                    w.damage,
+                    a.name as armor,
+                    a.defense
+                FROM players p
+                LEFT JOIN weapons w ON p.equipped_weapon = w.name
+                LEFT JOIN armor a ON p.equipped_armor = a.name
+                WHERE p.user_id = %s
+            """, (callback.from_user.id,))
+            player = cur.fetchone()
+
+            if not player:
+                logger.error("Данные игрока не найдены")
+                await callback.answer("❌ Персонаж не создан", show_alert=True)
+                return
+
+            stats = f"""
+🧍 Персонаж: {player['username'] or 'Без имени'}
+⚡ Уровень: {player['level']} (Опыт: {player['exp']}/{player['level'] * 100})
+
+❤️ Здоровье: {player['hp']}/{player['max_hp']}
+🛡️ Защита: {player.get('defense', 0)}
+💰 Золото: {player['gold']}
+
+🗡️ Оружие: {player['weapon'] or 'Нет'}
+⚔️ Урон: {player.get('damage', 0)}
+🛡️ Броня: {player['armor'] or 'Нет'}
+🎯 Защита: {player.get('defense', 0)}
+
+🗺️ Локация: {player['current_location']}
+            """
+            await callback.message.edit_text(
+                stats.strip(),
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")
+                )
+            )
+
+    except Exception as e:
+        logger.error(f"Stats error: {str(e)}", exc_info=True)
+        await callback.answer("💥 Ошибка загрузки статистики", show_alert=True)
     finally:
         if conn:
             conn.close()
@@ -472,49 +567,7 @@ async def process_back(callback: types.CallbackQuery):
         logger.error(f"Error in process_back: {e}")
         await callback.answer("⚠️ Ошибка при возврате в меню", show_alert=True)
 
-@dp.callback_query_handler(lambda c: c.data == 'stats')
-async def process_stats(callback: types.CallbackQuery):
-    conn = None
-    try:
-        await callback.answer()
-        conn = psycopg2.connect(POSTGRES_URL)
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute("""
-                SELECT p.*, w.name as weapon_name, a.name as armor_name
-                FROM players p
-                LEFT JOIN weapons w ON p.equipped_weapon = w.name
-                LEFT JOIN armor a ON p.equipped_armor = a.name
-                WHERE p.user_id = %s
-            """, (callback.from_user.id,))
-            player = cur.fetchone()
 
-            stats_text = f"""👤 {player['username']}
-⚔️ Уровень: {player['level']}
-❤️ Здоровье: {player['hp']}/{player['max_hp']}
-🛡️ Защита: {player['defense'] if player['defense'] else 0}
-💰 Золото: {player['gold']}
-🔶 Опыт: {player['exp']}/{player['level']*100}
-
-💪 Сила: {player['strength']}
-🏃‍♂️ Ловкость: {player['agility']}
-🧠 Интеллект: {player['intelligence']}
-
-⚔️ Оружие: {player['weapon_name'] if player['weapon_name'] else 'Нет'}
-🛡️ Броня: {player['armor_name'] if player['armor_name'] else 'Нет'}
-📍 Локация: {player['current_location']}"""
-
-            await callback.message.edit_text(
-                stats_text,
-                reply_markup=types.InlineKeyboardMarkup().row(
-                    types.InlineKeyboardButton("Назад ◀️", callback_data="back_to_menu")
-                )
-            )
-    except Exception as e:
-        logger.error(f"Error in process_stats: {e}")
-        await callback.answer("⚠️ Ошибка при загрузке статистики", show_alert=True)
-    finally:
-        if conn:
-            conn.close()
 
 @dp.callback_query_handler(lambda c: c.data == 'inventory')
 async def process_inventory(callback: types.CallbackQuery):
