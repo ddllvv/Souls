@@ -475,7 +475,7 @@ async def process_shop(callback: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Error in process_shop: {e}")
         await callback.answer("⚠️ Ошибка при открытии магазина", show_alert=True)
-            )
+        
 @dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
 async def process_back(callback: types.CallbackQuery):
     await callback.message.edit_text(
