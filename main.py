@@ -20,7 +20,7 @@ dp = Dispatcher(bot, storage=storage)
 # --- Подключение к PostgreSQL ---
 def get_db():
     try:
-        return psycopg2.connect(os.getenv("DATABASE_URL"))
+        return psycopg2.connect(os.getenv("postgresql://soulsbase_user:7mUrpaI5iLfNRmGlK2QMiMhf8swRgZob@dpg-cvjdpqhr0fns73fvebvg-a/soulsbase"))
     except OperationalError as e:
         logger.error(f"Ошибка подключения к БД: {e}")
         return None
