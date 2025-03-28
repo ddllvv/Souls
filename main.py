@@ -20,7 +20,7 @@ dp = Dispatcher(bot, storage=storage)
 # --- Подключение к PostgreSQL ---
 def get_db():
     try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        conn = psycopg2.connect(os.getenv("postgresql://soulsbase_user:7mUrpaI5iLfNRmGlK2QMiMhf8swRgZob@dpg-cvjdpqhr0fns73fvebvg-a/soulsbase"))
         conn.autocommit = True
         return conn
     except OperationalError as e:
