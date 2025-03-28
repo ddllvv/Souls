@@ -324,19 +324,86 @@ async def cmd_start(message: types.Message):
     finally:
         conn.close()
 # ===================== ОБНОВЛЕННЫЕ ОБРАБОТЧИКИ =====================
-
+def action_keyboard(action_type: str):
+    if action_type == "battle":
+        return types.InlineKeyboardMarkup().row(
+            types.InlineKeyboardButton("Атаковать ⚔️", callback_data="attack"),
+            types.InlineKeyboardButton("Защита 🛡️", callback_data="defend")
+        ).row(
+            types.InlineKeyboardButton("Исп. предмет 🧪", callback_data="use_item"),
+            types.InlineKeyboardButton("Бежать 🏃‍♂️", callback_data="flee")
+        )
+    else:
+        return types.InlineKeyboardMarkup().row(
+            types.InlineKeyboardButton("Продолжить ➡️", callback_data="continue")
+        )
+        
+def main_menu_keyboard():
+    return types.InlineKeyboardMarkup().row(
+        types.InlineKeyboardButton("Исследовать 🌍", callback_data="explore"),
+        types.InlineKeyboardButton("Инвентарь 🎒", callback_data="inventory")
+    ).row(
+        types.InlineKeyboardButton("Характеристики 📊", callback_data="stats"),
+        types.InlineKeyboardButton("Магазин 🏪", callback_data="shop")
+        )
+    
 @dp.callback_query_handler(lambda c: c.data == 'explore')
 async def process_explore(callback: types.CallbackQuery):
     try:
         await callback.answer()
-        result, action = await LocationSystem.explore_location(callback.from_user.id)
-        await callback.message.edit_text(
-            result,
-            reply_markup=action_keyboard(action)
-        )
+        conn = psycopg2.connect(POSTGRES_URL)
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            # Получаем текущую локацию игрока
+            cur.execute("SELECT current_location FROM players WHERE user_id = %s", (callback.from_user.id,))
+            player_data = cur.fetchone()
+            
+            if not player_data:
+                await callback.answer("Игрок не найден", show_alert=True)
+                return
+                
+            location_name = player_data['current_location']
+
+            # Получаем данные локации
+            cur.execute("SELECT * FROM locations WHERE name = %s", (location_name,))
+            location = cur.fetchone()
+            
+            if not location:
+                await callback.answer("Локация не найдена", show_alert=True)
+                return
+
+            # Выбираем случайное событие
+            if not location['events']:
+                await callback.answer("В этой локации нет событий", show_alert=True)
+                return
+                
+            event = random.choice(location['events'])
+            
+            if event == "fight":
+                if not location['enemies']:
+                    await callback.answer("Нет доступных врагов", show_alert=True)
+                    return
+                    
+                enemy = random.choice(location['enemies'])
+                result = await BattleSystem.handle_attack(callback.from_user.id, enemy)
+                await callback.message.edit_text(
+                    f"💀 На вас напал {enemy}!\n\n{result}",
+                    reply_markup=action_keyboard("battle")
+                )
+                
+            elif event == "treasure":
+                gold = random.randint(50, 200)
+                cur.execute("UPDATE players SET gold = gold + %s WHERE user_id = %s", (gold, callback.from_user.id))
+                await callback.message.edit_text(
+                    f"💎 Вы нашли сундук с {gold} золота!",
+                    reply_markup=action_keyboard(None)
+                )
+                
     except Exception as e:
-        logger.error(f"Error in process_explore: {e}")
-        await callback.answer("⚠️ Произошла ошибка при исследовании", show_alert=True)
+        logger.error(f"Error in process_explore: {e}", exc_info=True)
+        await callback.answer("⚠️ Ошибка при исследовании", show_alert=True)
+    finally:
+        if conn:
+            conn.close()
 
 @dp.callback_query_handler(lambda c: c.data == 'attack')
 async def process_attack(callback: types.CallbackQuery):
@@ -392,6 +459,7 @@ async def process_continue(callback: types.CallbackQuery):
         logger.error(f"Error in process_continue: {e}")
         await callback.answer("⚠️ Ошибка при продолжении", show_alert=True)
 
+@dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
 @dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
 async def process_back(callback: types.CallbackQuery):
     try:
