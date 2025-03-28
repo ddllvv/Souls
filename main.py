@@ -323,46 +323,80 @@ async def cmd_start(message: types.Message):
             )
     finally:
         conn.close()
+# ===================== ОБНОВЛЕННЫЕ ОБРАБОТЧИКИ =====================
 
 @dp.callback_query_handler(lambda c: c.data == 'explore')
 async def process_explore(callback: types.CallbackQuery):
-    result, action = await LocationSystem.explore_location(callback.from_user.id)
-    await callback.message.edit_text(result, reply_markup=action_keyboard(action))
-
-def main_menu_keyboard():
-    return types.InlineKeyboardMarkup().row(
-        types.InlineKeyboardButton("Исследовать 🌍", callback_data="explore"),
-        types.InlineKeyboardButton("Инвентарь 🎒", callback_data="inventory")
-    ).row(
-        types.InlineKeyboardButton("Характеристики 📊", callback_data="stats"),
-        types.InlineKeyboardButton("Магазин 🏪", callback_data="shop")
-    )
-
-def action_keyboard(action_type: str):
-    if action_type == "battle":
-        return types.InlineKeyboardMarkup().row(
-            types.InlineKeyboardButton("Атаковать ⚔️", callback_data="attack"),
-            types.InlineKeyboardButton("Защита 🛡️", callback_data="defend")
-        ).row(
-            types.InlineKeyboardButton("Исп. предмет 🧪", callback_data="use_item"),
-            types.InlineKeyboardButton("Бежать 🏃‍♂️", callback_data="flee")
+    try:
+        await callback.answer()
+        result, action = await LocationSystem.explore_location(callback.from_user.id)
+        await callback.message.edit_text(
+            result,
+            reply_markup=action_keyboard(action)
         )
-    else:
-        return types.InlineKeyboardMarkup().row(
-            types.InlineKeyboardButton("Продолжить ➡️", callback_data="continue")
-        )
+    except Exception as e:
+        logger.error(f"Error in process_explore: {e}")
+        await callback.answer("⚠️ Произошла ошибка при исследовании", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == 'attack')
 async def process_attack(callback: types.CallbackQuery):
-    # Получаем текущего врага из контекста (здесь нужна реализация хранения состояния боя)
-    enemy_name = "Лесной волк"  # Временное значение для примера
-    result = await BattleSystem.handle_attack(callback.from_user.id, enemy_name)
-    await callback.message.edit_text(result, reply_markup=action_keyboard("battle"))
+    try:
+        await callback.answer()
+        enemy_name = "Лесной волк"  # Временное значение, нужно заменить на логику получения текущего врага
+        result = await BattleSystem.handle_attack(callback.from_user.id, enemy_name)
+        await callback.message.edit_text(
+            result,
+            reply_markup=action_keyboard("battle")
+        )
+    except Exception as e:
+        logger.error(f"Error in process_attack: {e}")
+        await callback.answer("⚠️ Ошибка в бою", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data == 'defend')
+async def process_defend(callback: types.CallbackQuery):
+    try:
+        await callback.answer("🛡️ Вы защищаетесь (функционал в разработке)")
+    except Exception as e:
+        logger.error(f"Error in process_defend: {e}")
+        await callback.answer("⚠️ Ошибка при защите", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data == 'use_item')
+async def process_use_item(callback: types.CallbackQuery):
+    try:
+        await callback.answer("🧪 Использование предметов (функционал в разработке)")
+    except Exception as e:
+        logger.error(f"Error in process_use_item: {e}")
+        await callback.answer("⚠️ Ошибка при использовании предмета", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data == 'flee')
+async def process_flee(callback: types.CallbackQuery):
+    try:
+        await callback.answer("🏃‍♂️ Вы сбежали (функционал в разработке)")
+        await callback.message.edit_text(
+            "Вы успешно сбежали из боя!",
+            reply_markup=main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error in process_flee: {e}")
+        await callback.answer("⚠️ Ошибка при попытке бегства", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data == 'continue')
+async def process_continue(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+        await callback.message.edit_text(
+            "Вы продолжаете своё приключение:",
+            reply_markup=main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error in process_continue: {e}")
+        await callback.answer("⚠️ Ошибка при продолжении", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == 'stats')
 async def process_stats(callback: types.CallbackQuery):
-    conn = psycopg2.connect(POSTGRES_URL)
     try:
+        await callback.answer()
+        conn = psycopg2.connect(POSTGRES_URL)
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute("""
                 SELECT p.*, w.name as weapon_name, a.name as armor_name
@@ -394,15 +428,62 @@ async def process_stats(callback: types.CallbackQuery):
                     types.InlineKeyboardButton("Назад ◀️", callback_data="back_to_menu")
                 )
             )
+    except Exception as e:
+        logger.error(f"Error in process_stats: {e}")
+        await callback.answer("⚠️ Ошибка при загрузке статистики", show_alert=True)
     finally:
         conn.close()
 
+@dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
+async def process_back(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+        await callback.message.edit_text(
+            "🏰 Главное меню:",
+            reply_markup=main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error in process_back: {e}")
+        await callback.answer("⚠️ Ошибка при возврате в меню", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data == 'inventory')
+async def process_inventory(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+        # Заглушка для инвентаря
+        await callback.message.edit_text(
+            "🎒 Ваш инвентарь (функционал в разработке)",
+            reply_markup=types.InlineKeyboardMarkup().row(
+                types.InlineKeyboardButton("Назад ◀️", callback_data="back_to_menu")
+            )
+        )
+    except Exception as e:
+        logger.error(f"Error in process_inventory: {e}")
+        await callback.answer("⚠️ Ошибка при открытии инвентаря", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data == 'shop')
+async def process_shop(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+        # Заглушка для магазина
+        await callback.message.edit_text(
+            "🏪 Магазин (функционал в разработке)",
+            reply_markup=types.InlineKeyboardMarkup().row(
+                types.InlineKeyboardButton("Назад ◀️", callback_data="back_to_menu")
+            )
+        )
+    except Exception as e:
+        logger.error(f"Error in process_shop: {e}")
+        await callback.answer("⚠️ Ошибка при открытии магазина", show_alert=True)
+            )
 @dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
 async def process_back(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "🏰 Главное меню:",
         reply_markup=main_menu_keyboard()
     )
+    finally:
+        conn.close()
 
 # =============================================
 # ЗАПУСК БОТА
