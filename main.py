@@ -92,7 +92,7 @@ async def cmd_status(message: types.Message):
         
     try:
         with conn.cursor() as cur:
-            cur.execute(
+            cur.execute()
                 "SELECT hp, gold FROM players WHERE user_id = %s",
                 (message.from_user.id,)
             result = cur.fetchone()
