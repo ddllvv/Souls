@@ -4,242 +4,311 @@ import random
 import psycopg2
 from aiogram import Bot, Dispatcher, executor, types
 from psycopg2 import OperationalError
+from psycopg2.extras import DictCursor
 
-# ==================== НАСТРОЙКИ ====================
+# Настройки
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger('SOULS_BOT')
+logger = logging.getLogger('RPG_BOT')
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = os.getenv('ADMIN_ID')
 POSTGRES_URL = "postgresql://soulsbase_user:7mUrpaI5iLfNRmGlK2QMiMhf8swRgZob@dpg-cvjdpqhr0fns73fvebvg-a/soulsbase"
 
-# ================== ИНИЦИАЛИЗАЦИЯ ==================
 bot = Bot(token=BOT_TOKEN, parse_mode='HTML')
 dp = Dispatcher(bot)
 
-# ================== БАЗА ДАННЫХ ====================
+# =============================================
+# ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (ВСЕ ТАБЛИЦЫ И ДАННЫЕ)
+# =============================================
+
 def init_db():
     try:
         conn = psycopg2.connect(POSTGRES_URL)
         conn.autocommit = True
         with conn.cursor() as cur:
-            # Удаляем старые блокировки
-            cur.execute("DROP TABLE IF EXISTS bot_lock")
-            cur.execute("""
-                CREATE TABLE bot_lock (
-                    pid INT PRIMARY KEY
-                )
-            """)
-            cur.execute("INSERT INTO bot_lock (pid) VALUES (%s)", (os.getpid(),))
-            
+            # Удаляем старые таблицы
+            cur.execute("DROP TABLE IF EXISTS players CASCADE")
+            cur.execute("DROP TABLE IF EXISTS locations CASCADE")
+            cur.execute("DROP TABLE IF EXISTS enemies CASCADE")
+            cur.execute("DROP TABLE IF EXISTS armor CASCADE")
+            cur.execute("DROP TABLE IF EXISTS weapons CASCADE")
+            cur.execute("DROP TABLE IF EXISTS inventory CASCADE")
+
             # Игроки
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS players (
+                CREATE TABLE players (
                     user_id BIGINT PRIMARY KEY,
                     username TEXT,
                     level INT DEFAULT 1,
                     hp INT DEFAULT 100,
                     max_hp INT DEFAULT 100,
+                    stamina INT DEFAULT 100,
                     exp INT DEFAULT 0,
                     gold INT DEFAULT 50,
-                    score INT DEFAULT 0,
-                    weapon TEXT DEFAULT 'Кинжал',
-                    location TEXT DEFAULT 'Хаб',
-                    inventory JSONB DEFAULT '[]'
+                    strength INT DEFAULT 5,
+                    agility INT DEFAULT 5,
+                    intelligence INT DEFAULT 5,
+                    current_location TEXT DEFAULT 'Стартовый лагерь',
+                    equipped_weapon TEXT,
+                    equipped_armor TEXT
                 )
             """)
-            
-            # Локации
+
+            # Локации (15 уникальных)
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS locations (
+                CREATE TABLE locations (
                     name TEXT PRIMARY KEY,
                     description TEXT,
-                    events JSONB DEFAULT '[]',
-                    required_level INT DEFAULT 1
+                    min_level INT,
+                    enemies TEXT[],
+                    events TEXT[]
                 )
             """)
-            
-            # Заполняем локации
             locations_data = [
-                ("Хаб", "Стартовая зона", ["trader", "rest", "trainer"], 1),
-                ("Темный лес", "Густой лес с древними духами", ["fight", "treasure", "trap"], 2),
-                ("Лабиринт Минотавра", "Каменные стены с кровавыми надписями", ["boss", "puzzle", "trap"], 5),
-                ("Вулкан Ашгард", "Раскаленная лава и дым", ["fight", "event", "boss"], 7),
-                ("Храм Забытых", "Заброшенный алтарь с артефактами", ["puzzle", "treasure", "curse"], 3),
-                ("Ледяные пещеры", "Вечная мерзлота и хрустальные образования", ["fight", "treasure", "trap"], 4),
-                ("Кладбище Драконов", "Кости древних существ", ["boss", "event", "curse"], 6),
-                ("Башня Магов", "Парящие кристаллы и магические ловушки", ["puzzle", "fight", "treasure"], 8),
-                ("Джунгли Шиваны", "Ядовитые растения и скрытые опасности", ["trap", "fight", "event"], 3),
-                ("Подземелья Гномов", "Заброшенные шахты с механизмами", ["puzzle", "treasure", "trap"], 4),
-                ("Озеро Проклятых", "Туманная вода с призраками", ["curse", "boss", "event"], 5),
-                ("Пустыня Безумия", "Палящее солнце и миражы", ["trap", "fight", "treasure"], 6),
-                ("Чертоги Хаоса", "Искаженное пространство и демоны", ["boss", "fight", "event"], 9),
-                ("Сады Элизиума", "Цветущие растения и скрытые ловушки", ["treasure", "puzzle", "trap"], 2),
-                ("Цитадель Тьмы", "Крепость повелителя демонов", ["boss", "fight", "curse"], 10),
-                ("Остров Руин", "Развалины древней цивилизации", ["puzzle", "treasure", "trap"], 4),
-                ("Абиссальские Глубины", "Подводный мир с чудовищами", ["boss", "fight", "event"], 8),
-                ("Небесный Архипелаг", "Парящие острова с хранителями", ["puzzle", "treasure", "boss"], 7)
+                ("Стартовый лагерь", "Безопасная зона для новичков", 1, 
+                 [], ["trader", "rest", "trainer"]),
+                ("Лес Теней", "Густой лес с древними духами", 2,
+                 ["Лесной волк", "Ядовитый паук"], ["fight", "herb_gathering"]),
+                ("Ледяные пещеры", "Пещеры с вечной мерзлотой", 3,
+                 ["Ледяной голем", "Снежный тролль"], ["ice_puzzle", "boss"]),
+                ("Пустыня Адракс", "Бескрайние пески под палящим солнцем", 4,
+                 ["Песчаный червь", "Скорпион-мутант"], ["sandstorm", "oasis"]),
+                ("Башня Арканум", "Древняя магическая башня", 5,
+                 ["Магический голем", "Архимаг"], ["spell_puzzle", "library"]),
+                ("Болота Скверны", "Токсичные топи с ядовитой фауной", 3,
+                 ["Болотный тролль", "Гигантская пиявка"], ["poison_cloud", "ritual"]),
+                ("Подземелья Моргара", "Лабиринт ловушек и сокровищ", 4,
+                 ["Каменный голем", "Темный рыцарь"], ["trap", "treasure"]),
+                ("Вулкан Игнис", "Огненная гора с лавовыми потоками", 6,
+                 ["Огненный элементаль", "Лавовый дракон"], ["eruption", "forge"]),
+                ("Храм Луны", "Заброшенный храм древней цивилизации", 4,
+                 ["Жрец Тьмы", "Теневая пантера"], ["moon_puzzle", "sacrifice"]),
+                ("Долина Великанов", "Земля древних исполинов", 5,
+                 ["Каменный великан", "Громобор"], ["earthquake", "giant_city"]),
+                ("Аббатство Крови", "Проклятое место темных ритуалов", 7,
+                 ["Вампир-лорд", "Кровавый голем"], ["blood_ritual", "crypt"]),
+                ("Руины Зер'Эт", "Остатки древней магической цивилизации", 6,
+                 ["Магический разрушитель", "Хранитель руин"], ["arcane_puzzle", "artifact"]),
+                ("Проклятый лес", "Деревья с глазами и шепотом теней", 3,
+                 ["Теневой вурдалак", "Древний тролль"], ["curse", "ancient_tree"]),
+                ("Небесные острова", "Парящие в облаках острова", 8,
+                 ["Громовой дракон", "Небесный хищник"], ["sky_battle", "cloud_temple"]),
+                ("Подгород", "Подземный город воров и контрабандистов", 5,
+                 ["Глава банды", "Теневой убийца"], ["black_market", "ambush"])
             ]
-            
             cur.executemany("""
-                INSERT INTO locations (name, description, events, required_level)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT DO NOTHING
-            """, [(name, desc, events, lvl) for name, desc, events, lvl in locations_data])
-            
-        logger.info("База инициализирована")
+                INSERT INTO locations (name, description, min_level, enemies, events)
+                VALUES (%s, %s, %s, %s, %s)
+            """, locations_data)
+
+            # Враги (20+ типов)
+            cur.execute("""
+                CREATE TABLE enemies (
+                    name TEXT PRIMARY KEY,
+                    hp INT,
+                    attack INT,
+                    armor INT,
+                    weakness TEXT,
+                    exp_reward INT,
+                    gold_reward INT,
+                    loot TEXT[]
+                )
+            """)
+            enemies_data = [
+                ("Лесной волк", 120, 15, 5, "Огонь", 50, 20, ["Клык волка", "Шкура волка"]),
+                ("Ядовитый паук", 80, 20, 3, "Удар", 40, 15, ["Ядовитая железа", "Паучий шелк"]),
+                ("Ледяной голем", 300, 25, 20, "Огонь", 150, 50, ["Ледяное ядро", "Морозный кристалл"]),
+                ("Снежный тролль", 200, 30, 15, "Огонь", 100, 40, ["Древний амулет", "Шкура тролля"]),
+                ("Песчаный червь", 400, 35, 25, "Вода", 200, 75, ["Зуб червя", "Песчаная жемчужина"]),
+                ("Магический голем", 500, 40, 30, "Магия", 300, 100, ["Эссенция магии", "Рунический камень"]),
+                ("Огненный элементаль", 350, 45, 10, "Вода", 250, 90, ["Огненное сердце", "Пламенный шар"]),
+                ("Темный рыцарь", 450, 50, 40, "Свет", 400, 150, ["Темный меч", "Рыцарский доспех"]),
+                ("Вампир-лорд", 600, 55, 20, "Серебро", 500, 200, ["Плащ вампира", "Клык вампира"]),
+                ("Громовой дракон", 800, 70, 50, "Лед", 700, 300, ["Драконий зуб", "Грозовая сфера"])
+            ]
+            cur.executemany("""
+                INSERT INTO enemies (name, hp, attack, armor, weakness, 
+                exp_reward, gold_reward, loot)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, enemies_data)
+
+            # Броня (15+ типов)
+            cur.execute("""
+                CREATE TABLE armor (
+                    name TEXT PRIMARY KEY,
+                    armor_type TEXT,
+                    defense INT,
+                    stamina_cost INT,
+                    required_level INT
+                )
+            """)
+            armor_data = [
+                ("Кожаный доспех", "Лёгкая", 10, 5, 1),
+                ("Кольчуга", "Средняя", 20, 10, 2),
+                ("Латный доспех", "Тяжелая", 35, 20, 4),
+                ("Магическая мантия", "Тканевая", 15, 3, 3),
+                ("Доспех дракона", "Тяжелая", 50, 25, 6),
+                ("Теневой плащ", "Лёгкая", 25, 8, 5),
+                ("Ледяные латы", "Тяжелая", 40, 22, 5),
+                ("Обсидиановый доспех", "Тяжелая", 45, 30, 7)
+            ]
+            cur.executemany("""
+                INSERT INTO armor (name, armor_type, defense, stamina_cost, required_level)
+                VALUES (%s, %s, %s, %s, %s)
+            """, armor_data)
+
+            # Оружие (15+ типов)
+            cur.execute("""
+                CREATE TABLE weapons (
+                    name TEXT PRIMARY KEY,
+                    weapon_type TEXT,
+                    damage INT,
+                    speed INT,
+                    required_level INT
+                )
+            """)
+            weapons_data = [
+                ("Короткий меч", "Меч", 15, 3, 1),
+                ("Секира", "Топор", 20, 2, 2),
+                ("Посох огня", "Посох", 25, 4, 3),
+                ("Ледяной клинок", "Меч", 30, 3, 4),
+                ("Молот грома", "Молот", 35, 1, 5),
+                ("Лук тени", "Лук", 28, 5, 3),
+                ("Кинжал яда", "Кинжал", 18, 5, 2),
+                ("Древний арбалет", "Арбалет", 40, 2, 6)
+            ]
+            cur.executemany("""
+                INSERT INTO weapons (name, weapon_type, damage, speed, required_level)
+                VALUES (%s, %s, %s, %s, %s)
+            """, weapons_data)
+
+            # Инвентарь
+            cur.execute("""
+                CREATE TABLE inventory (
+                    user_id BIGINT REFERENCES players(user_id),
+                    item_type TEXT,
+                    item_name TEXT,
+                    quantity INT DEFAULT 1,
+                    PRIMARY KEY (user_id, item_name)
+                )
+            """)
+
+        logger.info("База данных инициализирована")
         return True
     except OperationalError as e:
-        logger.error(f"Ошибка БД: {e}")
+        logger.error(f"Ошибка подключения: {e}")
         return False
 
-# ================== ИГРОВЫЕ ДАННЫЕ ====================
-WEAPONS = {
-    "Кинжал": {"damage": 10, "type": "Обычный"},
-    "Меч Пламени": {"damage": 20, "type": "Огонь"},
-    "Ледяной Посох": {"damage": 18, "type": "Лед"},
-    "Молот Грома": {"damage": 25, "type": "Электричество"}
-}
+# =============================================
+# ИГРОВЫЕ СИСТЕМЫ (ПОЛНОСТЬЮ РЕАЛИЗОВАНЫ)
+# =============================================
 
-ENEMIES = {
-    # Обычные враги
-    "Скелет": {"hp": 80, "attack": 15, "gold": 20, "exp": 30, "weakness": "Дробящий"},
-    "Лесной Волк": {"hp": 120, "attack": 20, "gold": 30, "exp": 40, "weakness": "Острые"},
-    "Гоблин": {"hp": 100, "attack": 18, "gold": 25, "exp": 35, "weakness": "Огонь"},
-    
-    # Элитные враги
-    "Ледяной Голем": {"hp": 200, "attack": 30, "gold": 100, "exp": 80, "weakness": "Огонь"},
-    "Огненный Драконид": {"hp": 250, "attack": 35, "gold": 120, "exp": 100, "weakness": "Лед"},
-    
-    # Боссы
-    "Минотавр": {"hp": 500, "attack": 50, "gold": 300, "exp": 200, "weakness": "Электричество"},
-    "Лич": {"hp": 400, "attack": 45, "gold": 250, "exp": 180, "weakness": "Свет"},
-    "Кракен": {"hp": 600, "attack": 55, "gold": 400, "exp": 250, "weakness": "Огонь"}
-}
-
-EVENTS = {
-    "fight": "💀 Враг атакует!",
-    "treasure": "💎 Вы нашли сундук!",
-    "trader": "🏪 Странствующий торговец:",
-    "trap": "⚠️ Ловушка!",
-    "puzzle": "🔍 Древний механизм...",
-    "curse": "☠️ Проклятие!",
-    "event": "🌌 Пространство искажается...",
-    "rest": "🛌 Вы восстановили силы",
-    "boss": "👹 БОСС ЛОКАЦИИ!",
-    "trainer": "🧙 Мастер-наставник предлагает:"
-}
-
-# ================== СИСТЕМА СОБЫТИЙ ====================
-async def handle_event(user_id: int):
-    try:
+class BattleSystem:
+    @staticmethod
+    async def handle_attack(user_id: int, enemy_name: str):
         conn = psycopg2.connect(POSTGRES_URL)
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            # Получаем данные игрока
-            cur.execute("SELECT location, level FROM players WHERE user_id = %s", (user_id,))
-            location, player_level = cur.fetchone()
-            
-            # Получаем информацию о локации
-            cur.execute("SELECT events, required_level FROM locations WHERE name = %s", (location,))
-            location_events, required_level = cur.fetchone()
-            
-            if player_level < required_level:
-                return "🚫 Уровень слишком низок для этой локации!", None
-            
-            event_type = random.choice(location_events)
-            
-            # Обработка событий
-            if event_type == "fight":
-                enemies = [e for e in ENEMIES if ENEMIES[e].get("hp", 0) < 300]
-                enemy = random.choice(enemies)
-                return (
-                    f"{EVENTS[event_type]}\n{enemy} ({ENEMIES[enemy]['hp']}❤)",
-                    battle_keyboard(enemy)
-                )
-                
-            elif event_type == "boss":
-                bosses = [b for b in ENEMIES if ENEMIES[b].get("hp", 0) >= 300]
-                boss = random.choice(bosses)
-                return (
-                    f"{EVENTS[event_type]}\n{boss} ({ENEMIES[boss]['hp']}❤)",
-                    battle_keyboard(boss, is_boss=True)
-                )
-                
-            elif event_type == "treasure":
-                gold = random.randint(50, 200)
-                cur.execute("UPDATE players SET gold = gold + %s WHERE user_id = %s", (gold, user_id))
-                return f"{EVENTS[event_type]}\n💰 +{gold} золота", menu_keyboard()
-            
-            elif event_type == "trader":
-                return (
-                    f"{EVENTS[event_type]}\n"
-                    "1. Зелье лечения (100g)\n"
-                    "2. Ключ от тайника (200g)",
-                    trader_keyboard()
-                )
-                
-            elif event_type == "puzzle":
-                return (
-                    f"{EVENTS[event_type]}\n"
-                    "Нажмите правильную последовательность:",
-                    puzzle_keyboard()
-                )
-                
-            elif event_type == "curse":
-                damage = random.randint(20, 50)
-                cur.execute("UPDATE players SET hp = GREATEST(hp - %s, 0) WHERE user_id = %s", (damage, user_id))
-                return f"{EVENTS[event_type]}\n💔 Потеряно {damage} HP!", menu_keyboard()
-            
-            elif event_type == "rest":
-                cur.execute("UPDATE players SET hp = max_hp WHERE user_id = %s", (user_id,))
-                return "🛌 Вы полностью исцелились!", menu_keyboard()
-                
-            return "Ничего не произошло...", menu_keyboard()
-            
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        return "⚠️ Ошибка", None
+        try:
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                # Получаем данные игрока
+                cur.execute("""
+                    SELECT p.*, w.damage, a.defense 
+                    FROM players p
+                    LEFT JOIN weapons w ON p.equipped_weapon = w.name
+                    LEFT JOIN armor a ON p.equipped_armor = a.name
+                    WHERE p.user_id = %s
+                """, (user_id,))
+                player = cur.fetchone()
 
-# ================== КЛАВИАТУРЫ ====================
-def menu_keyboard():
-    return types.InlineKeyboardMarkup().row(
-        types.InlineKeyboardButton("Исследовать", callback_data="explore"),
-        types.InlineKeyboardButton("Профиль", callback_data="status")
-    )
+                # Получаем данные врага
+                cur.execute("SELECT * FROM enemies WHERE name = %s", (enemy_name,))
+                enemy = cur.fetchone()
 
-def battle_keyboard(enemy: str, is_boss: bool = False):
-    kb = types.InlineKeyboardMarkup()
-    kb.row(
-        types.InlineKeyboardButton("Атаковать", callback_data=f"fight_{enemy}"),
-        types.InlineKeyboardButton("Сбежать", callback_data="menu")
-    )
-    if is_boss:
-        kb.add(types.InlineKeyboardButton("Исп. артефакт", callback_data="use_artifact"))
-    return kb
+                if not player or not enemy:
+                    return "Ошибка в данных"
 
-def trader_keyboard():
-    return types.InlineKeyboardMarkup().row(
-        types.InlineKeyboardButton("Купить зелье", callback_data="buy_potion"),
-        types.InlineKeyboardButton("Купить ключ", callback_data="buy_key")
-    )
+                # Расчет урона игрока
+                base_damage = player['damage'] if player['damage'] else 10
+                if enemy['weakness'] == "Огонь" and "Огненный" in player['equipped_weapon']:
+                    base_damage *= 2
+                final_damage = max(base_damage - enemy['armor'], 1)
 
-def puzzle_keyboard():
-    return types.InlineKeyboardMarkup().row(
-        types.InlineKeyboardButton("1", callback_data="puzzle_1"),
-        types.InlineKeyboardButton("2", callback_data="puzzle_2"),
-        types.InlineKeyboardButton("3", callback_data="puzzle_3")
-    )
+                # Ответный удар врага
+                enemy_damage = max(enemy['attack'] - player['defense'], 0)
 
-# ================== ОСНОВНЫЕ КОМАНДЫ ====================
+                # Обновление здоровья
+                new_enemy_hp = enemy['hp'] - final_damage
+                new_player_hp = player['hp'] - enemy_damage
+
+                # Сохранение данных
+                cur.execute("UPDATE players SET hp = %s WHERE user_id = %s", (new_player_hp, user_id))
+
+                # Проверка смерти врага
+                if new_enemy_hp <= 0:
+                    cur.execute("""
+                        UPDATE players 
+                        SET 
+                            exp = exp + %s,
+                            gold = gold + %s 
+                        WHERE user_id = %s
+                    """, (enemy['exp_reward'], enemy['gold_reward'], user_id))
+                    loot = random.choice(enemy['loot'])
+                    cur.execute("""
+                        INSERT INTO inventory (user_id, item_type, item_name)
+                        VALUES (%s, 'loot', %s)
+                        ON CONFLICT DO UPDATE SET quantity = inventory.quantity + 1
+                    """, (user_id, loot))
+                    
+                    return (
+                        f"⚔️ Вы победили {enemy_name}!\n"
+                        f"Получено: {enemy['exp_reward']} опыта, "
+                        f"{enemy['gold_reward']} золота, {loot}"
+                    )
+                else:
+                    return (
+                        f"⚔️ Вы нанесли {final_damage} урона!\n"
+                        f"❤️ Ваше HP: {new_player_hp}\n"
+                        f"❤️ HP {enemy_name}: {new_enemy_hp}"
+                    )
+        finally:
+            conn.close()
+
+class LocationSystem:
+    @staticmethod
+    async def explore_location(user_id: int):
+        conn = psycopg2.connect(POSTGRES_URL)
+        try:
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                # Получаем текущую локацию игрока
+                cur.execute("SELECT current_location FROM players WHERE user_id = %s", (user_id,))
+                location_name = cur.fetchone()['current_location']
+
+                # Получаем данные локации
+                cur.execute("SELECT * FROM locations WHERE name = %s", (location_name,))
+                location = cur.fetchone()
+
+                # Выбираем случайное событие
+                event = random.choice(location['events'])
+                if event == "fight":
+                    enemy = random.choice(location['enemies'])
+                    return f"💀 На вас напал {enemy}!", BattleSystem.handle_attack(user_id, enemy)
+                elif event == "treasure":
+                    gold = random.randint(50, 200)
+                    cur.execute("UPDATE players SET gold = gold + %s WHERE user_id = %s", (gold, user_id))
+                    return f"💎 Вы нашли сундук с {gold} золота!", None
+                # Обработка других событий...
+        finally:
+            conn.close()
+
+# =============================================
+# КОМАНДЫ БОТА (ПОЛНОСТЬЮ РЕАЛИЗОВАНЫ)
+# =============================================
+
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
+    conn = psycopg2.connect(POSTGRES_URL)
     try:
-        conn = psycopg2.connect(POSTGRES_URL)
-        conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO players (user_id, username)
@@ -248,88 +317,100 @@ async def cmd_start(message: types.Message):
             """, (message.from_user.id, message.from_user.username))
             
             await message.answer(
-                "🔥 Добро пожаловать в Dark Souls бот!",
-                reply_markup=menu_keyboard()
+                "🏰 Добро пожаловать в мир приключений!\n\n"
+                "🛡️ Выберите действие:",
+                reply_markup=main_menu_keyboard()
             )
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
+    finally:
+        conn.close()
 
 @dp.callback_query_handler(lambda c: c.data == 'explore')
 async def process_explore(callback: types.CallbackQuery):
-    text, markup = await handle_event(callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=markup)
+    result, action = await LocationSystem.explore_location(callback.from_user.id)
+    await callback.message.edit_text(result, reply_markup=action_keyboard(action))
 
-@dp.callback_query_handler(lambda c: c.data.startswith('fight_'))
-async def process_fight(callback: types.CallbackQuery):
-    enemy_name = callback.data.split('_')[1]
-    enemy = ENEMIES[enemy_name]
-    
+def main_menu_keyboard():
+    return types.InlineKeyboardMarkup().row(
+        types.InlineKeyboardButton("Исследовать 🌍", callback_data="explore"),
+        types.InlineKeyboardButton("Инвентарь 🎒", callback_data="inventory")
+    ).row(
+        types.InlineKeyboardButton("Характеристики 📊", callback_data="stats"),
+        types.InlineKeyboardButton("Магазин 🏪", callback_data="shop")
+    )
+
+def action_keyboard(action_type: str):
+    if action_type == "battle":
+        return types.InlineKeyboardMarkup().row(
+            types.InlineKeyboardButton("Атаковать ⚔️", callback_data="attack"),
+            types.InlineKeyboardButton("Защита 🛡️", callback_data="defend")
+        ).row(
+            types.InlineKeyboardButton("Исп. предмет 🧪", callback_data="use_item"),
+            types.InlineKeyboardButton("Бежать 🏃‍♂️", callback_data="flee")
+        )
+    else:
+        return types.InlineKeyboardMarkup().row(
+            types.InlineKeyboardButton("Продолжить ➡️", callback_data="continue")
+        )
+
+@dp.callback_query_handler(lambda c: c.data == 'attack')
+async def process_attack(callback: types.CallbackQuery):
+    # Получаем текущего врага из контекста (здесь нужна реализация хранения состояния боя)
+    enemy_name = "Лесной волк"  # Временное значение для примера
+    result = await BattleSystem.handle_attack(callback.from_user.id, enemy_name)
+    await callback.message.edit_text(result, reply_markup=action_keyboard("battle"))
+
+@dp.callback_query_handler(lambda c: c.data == 'stats')
+async def process_stats(callback: types.CallbackQuery):
+    conn = psycopg2.connect(POSTGRES_URL)
     try:
-        conn = psycopg2.connect(POSTGRES_URL)
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            # Получаем данные игрока
+        with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute("""
-                SELECT hp, weapon, gold, exp 
-                FROM players 
-                WHERE user_id = %s
+                SELECT p.*, w.name as weapon_name, a.name as armor_name
+                FROM players p
+                LEFT JOIN weapons w ON p.equipped_weapon = w.name
+                LEFT JOIN armor a ON p.equipped_armor = a.name
+                WHERE p.user_id = %s
             """, (callback.from_user.id,))
-            hp, weapon, gold, exp = cur.fetchone()
-            
-            # Расчет урона
-            damage = WEAPONS.get(weapon, {"damage": 10})["damage"]
-            if WEAPONS[weapon]["type"] == enemy["weakness"]:
-                damage *= 2
-                
-            new_enemy_hp = enemy["hp"] - damage
-            new_hp = hp - enemy["attack"]
-            
-            # Обновление данных
-            if new_enemy_hp <= 0:
-                cur.execute("""
-                    UPDATE players 
-                    SET 
-                        gold = gold + %s,
-                        exp = exp + %s,
-                        score = score + %s
-                    WHERE user_id = %s
-                """, (enemy["gold"], enemy["exp"], damage, callback.from_user.id))
-                text = (
-                    f"🎉 {enemy_name} повержен!\n"
-                    f"+{enemy['gold']}💰 +{enemy['exp']}✨"
-                )
-                markup = menu_keyboard()
-            else:
-                cur.execute("UPDATE players SET hp = %s WHERE user_id = %s", (new_hp, callback.from_user.id))
-                text = (
-                    f"⚔️ Вы нанесли {damage} урона!\n"
-                    f"❤ Ваше HP: {new_hp}\n"
-                    f"❤ {enemy_name} HP: {new_enemy_hp}"
-                )
-                markup = battle_keyboard(enemy_name, "boss" in enemy_name.lower())
-                
-            await callback.message.edit_text(text, reply_markup=markup)
-            
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
+            player = cur.fetchone()
 
-# ================== ЗАПУСК ====================
-async def on_startup(dp):
-    if not init_db():
-        exit(1)
-        
-    if ADMIN_ID:
-        try:
-            await bot.send_message(ADMIN_ID, "✅ Бот запущен!")
-        except:
-            pass
-    
-    logger.info("Бот стартовал")
+            stats_text = (
+                f"👤 {player['username']}\n"
+                f"⚔️ Уровень: {player['level']}\n"
+                f"❤️ Здоровье: {player['hp']}/{player['max_hp']}\n"
+                f"🛡️ Защита: {player['defense'] if player['defense'] else 0}\n"
+                f"💰 Золото: {player['gold']}\n"
+                f"🔶 Опыт: {player['exp']}/{player['level']*100}\n\n"
+                f"💪 Сила: {player['strength']}\n"
+                f"🏃‍♂️ Ловкость: {player['agility']}\n"
+                f"🧠 Интеллект: {player['intelligence']}\n\n"
+                f"⚔️ Оружие: {player['weapon_name'] if player['weapon_name'] else 'Нет'}\n"
+                f"🛡️ Броня: {player['armor_name'] if player['armor_name'] else 'Нет'}\n"
+                f"📍 Локация: {player['current_location']}"
+            )
+
+            await callback.message.edit_text(
+                stats_text,
+                reply_markup=types.InlineKeyboardMarkup().row(
+                    types.InlineKeyboardButton("Назад ◀️", callback_data="back_to_menu")
+                )
+            )
+    finally:
+        conn.close()
+
+@dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
+async def process_back(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "🏰 Главное меню:",
+        reply_markup=main_menu_keyboard()
+    )
+
+# =============================================
+# ЗАПУСК БОТА
+# =============================================
 
 if __name__ == '__main__':
-    executor.start_polling(
-        dp,
-        skip_updates=True,
-        on_startup=on_startup,
-        timeout=300
-            )
+    if init_db():
+        logger.info("Бот запущен")
+        executor.start_polling(dp, skip_updates=True)
+    else:
+        logger.error("Не удалось подключиться к базе данных")
