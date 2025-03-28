@@ -392,8 +392,21 @@ async def process_continue(callback: types.CallbackQuery):
         logger.error(f"Error in process_continue: {e}")
         await callback.answer("⚠️ Ошибка при продолжении", show_alert=True)
 
+@dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
+async def process_back(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+        await callback.message.edit_text(
+            "🏰 Главное меню:",
+            reply_markup=main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error in process_back: {e}")
+        await callback.answer("⚠️ Ошибка при возврате в меню", show_alert=True)
+
 @dp.callback_query_handler(lambda c: c.data == 'stats')
 async def process_stats(callback: types.CallbackQuery):
+    conn = None
     try:
         await callback.answer()
         conn = psycopg2.connect(POSTGRES_URL)
@@ -407,20 +420,20 @@ async def process_stats(callback: types.CallbackQuery):
             """, (callback.from_user.id,))
             player = cur.fetchone()
 
-            stats_text = (
-                f"👤 {player['username']}\n"
-                f"⚔️ Уровень: {player['level']}\n"
-                f"❤️ Здоровье: {player['hp']}/{player['max_hp']}\n"
-                f"🛡️ Защита: {player['defense'] if player['defense'] else 0}\n"
-                f"💰 Золото: {player['gold']}\n"
-                f"🔶 Опыт: {player['exp']}/{player['level']*100}\n\n"
-                f"💪 Сила: {player['strength']}\n"
-                f"🏃‍♂️ Ловкость: {player['agility']}\n"
-                f"🧠 Интеллект: {player['intelligence']}\n\n"
-                f"⚔️ Оружие: {player['weapon_name'] if player['weapon_name'] else 'Нет'}\n"
-                f"🛡️ Броня: {player['armor_name'] if player['armor_name'] else 'Нет'}\n"
-                f"📍 Локация: {player['current_location']}"
-            )
+            stats_text = f"""👤 {player['username']}
+⚔️ Уровень: {player['level']}
+❤️ Здоровье: {player['hp']}/{player['max_hp']}
+🛡️ Защита: {player['defense'] if player['defense'] else 0}
+💰 Золото: {player['gold']}
+🔶 Опыт: {player['exp']}/{player['level']*100}
+
+💪 Сила: {player['strength']}
+🏃‍♂️ Ловкость: {player['agility']}
+🧠 Интеллект: {player['intelligence']}
+
+⚔️ Оружие: {player['weapon_name'] if player['weapon_name'] else 'Нет'}
+🛡️ Броня: {player['armor_name'] if player['armor_name'] else 'Нет'}
+📍 Локация: {player['current_location']}"""
 
             await callback.message.edit_text(
                 stats_text,
@@ -432,19 +445,8 @@ async def process_stats(callback: types.CallbackQuery):
         logger.error(f"Error in process_stats: {e}")
         await callback.answer("⚠️ Ошибка при загрузке статистики", show_alert=True)
     finally:
-        conn.close()
-
-@dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
-async def process_back(callback: types.CallbackQuery):
-    try:
-        await callback.answer()
-        await callback.message.edit_text(
-            "🏰 Главное меню:",
-            reply_markup=main_menu_keyboard()
-        )
-    except Exception as e:
-        logger.error(f"Error in process_back: {e}")
-        await callback.answer("⚠️ Ошибка при возврате в меню", show_alert=True)
+        if conn:
+            conn.close()
 
 @dp.callback_query_handler(lambda c: c.data == 'inventory')
 async def process_inventory(callback: types.CallbackQuery):
@@ -476,15 +478,6 @@ async def process_shop(callback: types.CallbackQuery):
         logger.error(f"Error in process_shop: {e}")
         await callback.answer("⚠️ Ошибка при открытии магазина", show_alert=True)
         
-@dp.callback_query_handler(lambda c: c.data == 'back_to_menu')
-async def process_back(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "🏰 Главное меню:",
-        reply_markup=main_menu_keyboard()
-    )
-    finally:
-        conn.close()
-
 # =============================================
 # ЗАПУСК БОТА
 # =============================================
