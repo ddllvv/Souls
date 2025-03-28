@@ -4,3 +4,4 @@ sqlalchemy==2.0.23
 apscheduler==3.10.1
 requests==2.31.0
 loguru==0.7.2  # Для удобного логирования (опционально)
+psycopg2-binary==2.9.9
