@@ -20,7 +20,9 @@ dp = Dispatcher(bot, storage=storage)
 # --- Подключение к PostgreSQL ---
 def get_db():
     try:
-        return psycopg2.connect(os.getenv("postgresql://soulsbase_user:7mUrpaI5iLfNRmGlK2QMiMhf8swRgZob@dpg-cvjdpqhr0fns73fvebvg-a/soulsbase"))
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        conn.autocommit = True
+        return conn
     except OperationalError as e:
         logger.error(f"Ошибка подключения к БД: {e}")
         return None
@@ -47,11 +49,10 @@ async def register_player(user_id: int, username: str):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO players (user_id, username, current_location) "
-                "VALUES (%s, %s, 'Хаб')",
+                "INSERT INTO players (user_id, username, hp, gold) "
+                "VALUES (%s, %s, 100, 50)",
                 (user_id, username)
             )
-            conn.commit()
             return True
     except Exception as e:
         logger.error(f"Ошибка регистрации: {e}")
@@ -66,18 +67,48 @@ async def cmd_start(message: types.Message):
     username = message.from_user.username or "Безымянный"
     
     if await is_player_exists(user_id):
-        await message.answer("🔮 Вы уже в игре! Используйте /explore")
+        await message.answer("🗡 Вы уже в игре! Используйте /explore")
     else:
         if await register_player(user_id, username):
             await message.answer(
                 "🔥 Добро пожаловать в Dark Souls бот!\n\n"
-                "🛡️ Доступные команды:\n"
+                "🛡️ Ваши характеристики:\n"
+                "HP: 100/100\n"
+                "Золото: 50\n\n"
+                "Команды:\n"
                 "/explore - исследовать локацию\n"
-                "/status - ваш статус\n"
-                "/inventory - инвентарь"
+                "/status - ваш статус"
             )
         else:
             await message.answer("⚠️ Ошибка регистрации. Попробуйте позже.")
+
+# --- Команда /status ---
+@dp.message_handler(commands=['status'])
+async def cmd_status(message: types.Message):
+    conn = get_db()
+    if not conn:
+        await message.answer("⚠️ Ошибка БД")
+        return
+        
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT hp, gold FROM players WHERE user_id = %s",
+                (message.from_user.id,)
+            result = cur.fetchone()
+            
+            if result:
+                hp, gold = result
+                await message.answer(
+                    f"📊 Ваш статус:\n"
+                    f"❤️ HP: {hp}/100\n"
+                    f"💰 Золото: {gold}\n"
+                    f"⚔️ Оружие: Кинжал"
+                )
+            else:
+                await message.answer("Сначала зарегистрируйтесь через /start")
+    finally:
+        conn.close()
 
 # --- Команда /explore ---
 @dp.message_handler(commands=['explore'])
@@ -87,13 +118,13 @@ async def cmd_explore(message: types.Message):
         return
         
     keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(
+    keyboard.row(
         types.InlineKeyboardButton("Идти вперед", callback_data="move_forward"),
         types.InlineKeyboardButton("Осмотреться", callback_data="look_around")
     )
     
     await message.answer(
-        "🌑 Вы стоите в мрачном коридоре. Что будете делать?",
+        "🌑 Вы в мрачном коридоре. Что будете делать?",
         reply_markup=keyboard
     )
 
@@ -105,8 +136,8 @@ async def process_move(callback: types.CallbackQuery):
     if action == "forward":
         await callback.message.edit_text(
             "Вы осторожно продвигаетесь вперед...\n"
-            "Внезапно перед вами появляется Скелет!",
-            reply_markup=types.InlineKeyboardMarkup().add(
+            "💀 Перед вами появляется Скелет!",
+            reply_markup=types.InlineKeyboardMarkup().row(
                 types.InlineKeyboardButton("Атаковать", callback_data="fight_skeleton"),
                 types.InlineKeyboardButton("Бежать", callback_data="run_away")
             )
@@ -115,6 +146,26 @@ async def process_move(callback: types.CallbackQuery):
 
 # --- Запуск бота ---
 async def on_startup(dp):
+    # Инициализация БД
+    conn = get_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS players (
+                        user_id BIGINT PRIMARY KEY,
+                        username TEXT,
+                        hp INTEGER DEFAULT 100,
+                        gold INTEGER DEFAULT 50,
+                        weapon TEXT DEFAULT 'Кинжал',
+                        armor TEXT DEFAULT 'Тряпье',
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+        finally:
+            conn.close()
+    
+    await bot.delete_webhook()
     await bot.send_message(os.getenv("ADMIN_ID"), "🤖 Бот успешно запущен!")
     logger.info("Bot started")
 
@@ -125,4 +176,4 @@ if __name__ == '__main__':
         on_startup=on_startup,
         timeout=60,
         relax=0.1
-)
+    )
