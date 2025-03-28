@@ -332,5 +332,4 @@ if __name__ == '__main__':
         skip_updates=True,
         on_startup=on_startup,
         timeout=300
-            )meout=300
-)
+            )
